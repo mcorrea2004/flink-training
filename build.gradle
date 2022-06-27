@@ -97,7 +97,7 @@ subprojects {
         javaVersion = '1.8'
         flinkVersion = '1.15.0'
         scalaBinaryVersion = '2.12'
-        log4jVersion = '2.12.1'
+        log4jVersion = '2.17.1'
         junitVersion = '4.13'
     }
 
