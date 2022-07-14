@@ -19,12 +19,18 @@
 package org.apache.flink.training.exercises.hourlytips.scala
 
 import org.apache.flink.api.common.JobExecutionResult
+import org.apache.flink.api.common.eventtime.{SerializableTimestampAssigner, WatermarkStrategy}
 import org.apache.flink.streaming.api.functions.sink.{PrintSinkFunction, SinkFunction}
 import org.apache.flink.streaming.api.functions.source.SourceFunction
 import org.apache.flink.streaming.api.scala._
+import org.apache.flink.streaming.api.scala.function.ProcessWindowFunction
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows
+import org.apache.flink.streaming.api.windowing.time.Time
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow
 import org.apache.flink.training.exercises.common.datatypes.TaxiFare
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator
 import org.apache.flink.training.exercises.common.utils.MissingSolutionException
+import org.apache.flink.util.Collector
 
 /** The Hourly Tips exercise from the Flink training.
   *
@@ -46,26 +52,63 @@ object HourlyTipsExercise {
       */
     @throws[Exception]
     def execute(): JobExecutionResult = {
-
-      val env = StreamExecutionEnvironment.getExecutionEnvironment
+      // replace this with your solution
+      /*if (true) {
+        throw new MissingSolutionException
+      }*/
 
       // start the data generator
-      val fares: DataStream[TaxiFare] = env.addSource(source)
+      /*val fares: DataStream[TaxiFare] = env.addSource(source)
+      fares
+        .keyBy(_.driverId) // Group and split the data stream by driverID
+        .window(TumblingEventTimeWindows.of(Time.hours(1))) // Define the window assignment, in this case a simple window of 1 hour
+        .process(new MaximumTip())
+        .addSink(sink)*/
 
-      // replace this with your solution
-      if (true) {
-        throw new MissingSolutionException
-      }
+      // Get the Flink execution environment
+      val env = StreamExecutionEnvironment.getExecutionEnvironment
 
-      // the results should be sent to the sink that was passed in
-      // (otherwise the tests won't work)
-      // you can end the pipeline with something like this:
+      // Set up teh watermark strategy, for the ordered (by timestamp) taxi fare stream
+      val watermarkStrategy = WatermarkStrategy
+        .forMonotonousTimestamps[TaxiFare]()
+        .withTimestampAssigner(new SerializableTimestampAssigner[TaxiFare] {
+          override def extractTimestamp(fare: TaxiFare, streamRecordTimestamp: Long): Long =
+            fare.getEventTimeMillis
+        })
 
-      // val hourlyMax = ...
-      // hourlyMax.addSink(sink);
+      // Set up the pipeline
+      env
+        .addSource(source) // Add the source data stream to Flink execution environment
+        .assignTimestampsAndWatermarks(watermarkStrategy) // Assign the watermarks strategy
+        .map((f: TaxiFare) => (f.driverId, f.tip)) // Map each TaxiFare model to a (Long, Float) tuple containing only the needed information
+        .keyBy(_._1) // // Group and split the data stream by driverID
+        .window(TumblingEventTimeWindows.of(Time.hours(1))) // Define the window assignment, in this case a simple window of 1 hour
+        .reduce(
+          (f1: (Long, Float), f2: (Long, Float)) => { (f1._1, f1._2 + f2._2) },
+          new MaximumTip()
+        )
+        .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
+        .maxBy(2)
+        .addSink(sink)
 
       // execute the pipeline and return the result
       env.execute("Hourly Tips")
     }
+  }
+}
+
+class MaximumTip extends ProcessWindowFunction[(Long, Float), (Long, Long, Float), Long, TimeWindow] {
+  override def process(
+                        key: Long,
+                        context: Context,
+                        elements: Iterable[(Long, Float)],
+                        out: Collector[(Long, Long, Float)]
+                      ): Unit = {
+/*    val max = elements.reduce((fare1, fare2) => {
+      Math.max(fare1.tip, fare2.tip)
+    })*/
+
+    val sumOfTips = elements.iterator.next()._2
+    out.collect((context.window.getEnd, key, sumOfTips))
   }
 }
