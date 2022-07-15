@@ -86,10 +86,10 @@ object HourlyTipsExercise {
         .reduce(
           (f1: (Long, Float), f2: (Long, Float)) => { (f1._1, f1._2 + f2._2) },
           new MaximumTip()
-        )
+        ) // This reduces all tips to a single one per driverID, containing the driverID and the sum of the tips that belong to the same driverID
         .windowAll(TumblingEventTimeWindows.of(Time.hours(1)))
-        .maxBy(2)
-        .addSink(sink)
+        .maxBy(2) // It gets the maximum of all items coming out from the data stream
+        .addSink(sink) // It puts the result in the given sink
 
       // execute the pipeline and return the result
       env.execute("Hourly Tips")

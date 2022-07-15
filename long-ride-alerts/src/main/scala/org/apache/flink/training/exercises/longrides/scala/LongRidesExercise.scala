@@ -20,6 +20,7 @@ package org.apache.flink.training.exercises.longrides.scala
 
 import org.apache.flink.api.common.JobExecutionResult
 import org.apache.flink.api.common.eventtime.{SerializableTimestampAssigner, WatermarkStrategy}
+import org.apache.flink.api.common.state.{ValueState, ValueStateDescriptor}
 import org.apache.flink.configuration.Configuration
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction
 import org.apache.flink.streaming.api.functions.sink.{PrintSinkFunction, SinkFunction}
@@ -81,23 +82,72 @@ object LongRidesExercise {
   }
 
   class AlertFunction extends KeyedProcessFunction[Long, TaxiRide, Long] {
+    private var rideState: ValueState[TaxiRide] = _
 
     override def open(parameters: Configuration): Unit = {
-      throw new MissingSolutionException()
+      rideState = getRuntimeContext.getState(
+        new ValueStateDescriptor[TaxiRide]("ride event", classOf[TaxiRide])
+      )
     }
 
     override def processElement(
-        ride: TaxiRide,
-        context: KeyedProcessFunction[Long, TaxiRide, Long]#Context,
-        out: Collector[Long]
-    ): Unit = {}
+                                 ride: TaxiRide,
+                                 context: KeyedProcessFunction[Long, TaxiRide, Long]#Context,
+                                 out: Collector[Long]
+                               ): Unit = {
+
+      val firstRideEvent: TaxiRide = rideState.value
+
+      if (firstRideEvent == null) {
+        // whatever event comes first, remember it
+        rideState.update(ride)
+
+        if (ride.isStart) {
+          // we will use this timer to check for rides that have gone on too long and may
+          // not yet have an END event (or the END event could be missing)
+          context.timerService.registerEventTimeTimer(getTimerTime(ride))
+        }
+      } else {
+        if (ride.isStart) {
+          if (rideTooLong(ride, firstRideEvent)) {
+            out.collect(ride.rideId)
+          }
+        } else {
+          // the first ride was a START event, so there is a timer unless it has fired
+          context.timerService.deleteEventTimeTimer(getTimerTime(firstRideEvent))
+
+          // perhaps the ride has gone on too long, but the timer didn't fire yet
+          if (rideTooLong(firstRideEvent, ride)) {
+            out.collect(ride.rideId)
+          }
+        }
+
+        // both events have now been seen, we can clear the state
+        // this solution can leak state if an event is missing
+        // see DISCUSSION.md for more information
+        rideState.clear()
+      }
+    }
 
     override def onTimer(
-        timestamp: Long,
-        ctx: KeyedProcessFunction[Long, TaxiRide, Long]#OnTimerContext,
-        out: Collector[Long]
-    ): Unit = {}
+                          timestamp: Long,
+                          ctx: KeyedProcessFunction[Long, TaxiRide, Long]#OnTimerContext,
+                          out: Collector[Long]
+                        ): Unit = {
 
+      // the timer only fires if the ride was too long
+      out.collect(rideState.value().rideId)
+
+      // clearing now prevents duplicate alerts, but will leak state if the END arrives
+      rideState.clear()
+    }
+
+    private def rideTooLong(startEvent: TaxiRide, endEvent: TaxiRide) =
+      Duration
+        .between(startEvent.eventTime, endEvent.eventTime)
+        .compareTo(Duration.ofHours(2)) > 0
+
+    private def getTimerTime(ride: TaxiRide) = ride.eventTime.toEpochMilli + 2.hours.toMillis
   }
 
 }
